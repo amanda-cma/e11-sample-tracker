@@ -37,11 +37,30 @@ jobs:
           }
           
           console.log('Fetching from Notion Injection Tracker...');
+          console.log('Raw database ID:', databaseId);
+          
+          // Clean and format database ID
+          let cleanDbId = databaseId.trim().replace(/\s+/g, '');
+          
+          // Format database ID with dashes if not already formatted
+          let formattedDbId = cleanDbId;
+          if (!cleanDbId.includes('-') && cleanDbId.length === 32) {
+            formattedDbId = cleanDbId.substring(0, 8) + '-' + 
+                           cleanDbId.substring(8, 12) + '-' + 
+                           cleanDbId.substring(12, 16) + '-' + 
+                           cleanDbId.substring(16, 20) + '-' + 
+                           cleanDbId.substring(20);
+            console.log('Formatted database ID:', formattedDbId);
+          }
+          
+          // URL encode the database ID to handle special characters
+          const encodedDbId = encodeURIComponent(formattedDbId);
+          console.log('Encoded database ID:', encodedDbId);
           
           const options = {
             hostname: 'api.notion.com',
             port: 443,
-            path: `/v1/databases/${databaseId}/query`,
+            path: `/v1/databases/${encodedDbId}/query`,
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${apiKey}`,
@@ -171,4 +190,3 @@ jobs:
           git add notion-data.json notion-samples-backup.json
           git diff --staged --quiet || git commit -m "Update Notion data - $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
-  
