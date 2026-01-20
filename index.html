@@ -446,14 +446,26 @@ async function testNotionConnection() {
         debugLog('Response data', data);
         
         if (!response.ok) {
-            throw new Error(data.message || 'Connection failed');
+            let errorMsg = data.message || data.code || 'Connection failed';
+            
+            // Add helpful context for common errors
+            if (response.status === 404 || data.code === 'object_not_found') {
+                errorMsg = 'Database not found. Check the Database ID or try with/without dashes.';
+            } else if (response.status === 401 || data.code === 'unauthorized') {
+                errorMsg = 'Unauthorized. Make sure the database is shared with your integration.';
+            } else if (response.status === 400 || data.code === 'invalid_request') {
+                errorMsg = 'Invalid request. Check your API key for typos.';
+            }
+            
+            throw new Error(errorMsg);
         }
         
         showNotionStatus('✓ Connection successful! Found database. Click "Save & Start Sync" to begin.', 'success');
         debugLog('Connection test successful');
     } catch (error) {
-        showNotionStatus(`✗ Connection failed: ${error.message}`, 'error');
-        debugLog('Connection test failed', error);
+        const errorMsg = error.message || 'Unknown error';
+        showNotionStatus(`✗ Connection failed: ${errorMsg}`, 'error');
+        debugLog('Connection test failed: ' + errorMsg, error);
     }
 }
 
@@ -517,7 +529,16 @@ async function syncFromNotion() {
         
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.message || 'API error');
+            let errorMsg = error.message || error.code || 'API error';
+            
+            // Add helpful context
+            if (response.status === 404 || error.code === 'object_not_found') {
+                errorMsg = 'Database not found. Check Database ID in settings.';
+            } else if (response.status === 401 || error.code === 'unauthorized') {
+                errorMsg = 'Unauthorized. Make sure database is shared with integration.';
+            }
+            
+            throw new Error(errorMsg);
         }
         
         const data = await response.json();
@@ -602,7 +623,7 @@ async function syncFromNotion() {
         
     } catch (error) {
         console.error('Notion sync error:', error);
-        debugLog('Sync error', error);
+        debugLog('Sync error: ' + error.message, error);
         updateSyncStatus('Sync failed: ' + error.message, true);
     }
 }
