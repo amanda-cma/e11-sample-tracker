@@ -45,7 +45,7 @@ jobs:
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${apiKey}`,
-              'Notion-Version': '2022-06-28',
+              'Notion-Version': '2025-09-03',
               'Content-Type': 'application/json'
             }
           };
@@ -171,3 +171,4 @@ jobs:
           git add notion-data.json notion-samples-backup.json
           git diff --staged --quiet || git commit -m "Update Notion data - $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
+  
