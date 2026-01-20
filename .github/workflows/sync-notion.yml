@@ -2,9 +2,8 @@ name: Sync Notion Data
 
 on:
   schedule:
-    # Run every 5 minutes
     - cron: '*/5 * * * *'
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -14,179 +13,106 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          
       - name: Fetch Notion data
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         run: |
-          node << 'EOF'
-          const https = require('https');
+          curl -X POST 'https://api.notion.com/v1/databases/e8c370d9-e558-47b0-8afc-b2fc99fdc4ce/query' \
+            -H "Authorization: Bearer $NOTION_API_KEY" \
+            -H "Notion-Version: 2025-09-03" \
+            -H "Content-Type: application/json" \
+            -d '{"page_size": 100}' \
+            -o notion-response.json
+          
+          echo "Response received:"
+          head -c 500 notion-response.json
+          
+      - name: Process data
+        run: |
+          node << 'SCRIPT'
           const fs = require('fs');
           
-          const apiKey = process.env.NOTION_API_KEY;
-          const databaseId = process.env.NOTION_DATABASE_ID;
-          
-          if (!apiKey || !databaseId) {
-            console.error('Missing environment variables');
-            process.exit(1);
-          }
-          
-          console.log('Fetching from Notion Injection Tracker...');
-          console.log('Raw database ID:', databaseId);
-          
-          // Clean and format database ID
-          let cleanDbId = databaseId.trim().replace(/\s+/g, '');
-          
-          // Format database ID with dashes if not already formatted
-          let formattedDbId = cleanDbId;
-          if (!cleanDbId.includes('-') && cleanDbId.length === 32) {
-            formattedDbId = cleanDbId.substring(0, 8) + '-' + 
-                           cleanDbId.substring(8, 12) + '-' + 
-                           cleanDbId.substring(12, 16) + '-' + 
-                           cleanDbId.substring(16, 20) + '-' + 
-                           cleanDbId.substring(20);
-            console.log('Formatted database ID:', formattedDbId);
-          }
-          
-          // URL encode the database ID to handle special characters
-          const encodedDbId = encodeURIComponent(formattedDbId);
-          console.log('Encoded database ID:', encodedDbId);
-          
-          const options = {
-            hostname: 'api.notion.com',
-            port: 443,
-            path: `/v1/databases/${encodedDbId}/query`,
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Notion-Version': '2025-09-03',
-              'Content-Type': 'application/json'
+          try {
+            const response = JSON.parse(fs.readFileSync('notion-response.json', 'utf8'));
+            
+            if (response.object === 'error') {
+              console.error('Notion API Error:', response.message);
+              process.exit(1);
             }
-          };
-          
-          const postData = JSON.stringify({
-            page_size: 100
-          });
-          
-          const req = https.request(options, (res) => {
-            let data = '';
             
-            res.on('data', (chunk) => {
-              data += chunk;
-            });
+            console.log(`Fetched ${response.results.length} pages`);
             
-            res.on('end', () => {
-              if (res.statusCode !== 200) {
-                console.error(`Error: ${res.statusCode}`);
-                console.error(data);
-                process.exit(1);
+            const samples = [];
+            const pickLists = {};
+            
+            response.results.forEach(page => {
+              const props = page.properties;
+              
+              // Get Injection ID (title)
+              let injectionId = '';
+              if (props['Injection ID'] && props['Injection ID'].title && props['Injection ID'].title[0]) {
+                injectionId = props['Injection ID'].title[0].plain_text;
               }
               
-              const response = JSON.parse(data);
-              console.log(`Fetched ${response.results.length} pages`);
+              if (!injectionId) return;
               
-              // Process the data
-              const samples = [];
-              const pickLists = {};
+              // Get other properties
+              let description = '';
+              if (props['Experiment Description - Manual'] && props['Experiment Description - Manual'].rich_text && props['Experiment Description - Manual'].rich_text[0]) {
+                description = props['Experiment Description - Manual'].rich_text[0].plain_text;
+              }
               
-              response.results.forEach(page => {
-                const props = page.properties;
-                
-                // Get Injection ID (title property)
-                let injectionId = '';
-                if (props['Injection ID'] && props['Injection ID'].title && props['Injection ID'].title[0]) {
-                  injectionId = props['Injection ID'].title[0].plain_text;
-                }
-                
-                if (!injectionId) {
-                  return; // Skip if no ID
-                }
-                
-                // Get Experiment Description
-                let description = '';
-                if (props['Experiment Description - Manual'] && props['Experiment Description - Manual'].rich_text && props['Experiment Description - Manual'].rich_text[0]) {
-                  description = props['Experiment Description - Manual'].rich_text[0].plain_text;
-                }
-                
-                // Get Location
-                let location = '';
-                if (props['Location'] && props['Location'].rich_text && props['Location'].rich_text[0]) {
-                  location = props['Location'].rich_text[0].plain_text;
-                }
-                
-                // Get Reserved Status (multi-select, take first)
-                let reserved = 'Available';
-                if (props['Reserved'] && props['Reserved'].multi_select && props['Reserved'].multi_select[0]) {
-                  reserved = props['Reserved'].multi_select[0].name;
-                }
-                
-                // Get Sectioning Date
-                let sectioningDate = '';
-                if (props['date:Sectioning Date:start'] && props['date:Sectioning Date:start'].date) {
-                  sectioningDate = props['date:Sectioning Date:start'].date.start;
-                }
-                
-                // Get Pick List (multi-select) ← THE KEY FEATURE!
-                let pickList = [];
-                if (props['Pick List'] && props['Pick List'].multi_select) {
-                  pickList = props['Pick List'].multi_select.map(item => item.name);
-                }
-                
-                // Store pick list separately for easy access
-                if (pickList.length > 0) {
-                  pickLists[injectionId] = pickList;
-                }
-                
-                // Create sample object
-                samples.push({
-                  injectionId: injectionId,
-                  experimentDescription: description,
-                  reservedStatus: reserved,
-                  location: location,
-                  sectioningDate: sectioningDate,
-                  status: 'in_place',
-                  checkedOutBy: null,
-                  checkedOutTime: null
-                });
+              let location = '';
+              if (props['Location'] && props['Location'].rich_text && props['Location'].rich_text[0]) {
+                location = props['Location'].rich_text[0].plain_text;
+              }
+              
+              let reserved = 'Available';
+              if (props['Reserved'] && props['Reserved'].multi_select && props['Reserved'].multi_select[0]) {
+                reserved = props['Reserved'].multi_select[0].name;
+              }
+              
+              // Get Pick List
+              let pickList = [];
+              if (props['Pick List'] && props['Pick List'].multi_select) {
+                pickList = props['Pick List'].multi_select.map(item => item.name);
+              }
+              
+              if (pickList.length > 0) {
+                pickLists[injectionId] = pickList;
+              }
+              
+              samples.push({
+                injectionId,
+                experimentDescription: description,
+                reservedStatus: reserved,
+                location,
+                status: 'in_place'
               });
-              
-              // Save to file
-              const output = {
-                samples: samples,
-                pickLists: pickLists,
-                lastSync: new Date().toISOString(),
-                totalSamples: samples.length,
-                totalWithPickLists: Object.keys(pickLists).length
-              };
-              
-              fs.writeFileSync('notion-data.json', JSON.stringify(output, null, 2));
-              console.log(`✓ Saved ${samples.length} samples`);
-              console.log(`✓ Saved ${Object.keys(pickLists).length} pick lists`);
-              console.log(`✓ Last sync: ${output.lastSync}`);
-              
-              // Also save just the samples for backup
-              fs.writeFileSync('notion-samples-backup.json', JSON.stringify({samples: samples}, null, 2));
             });
-          });
-          
-          req.on('error', (error) => {
-            console.error('Request error:', error);
+            
+            const output = {
+              samples,
+              pickLists,
+              lastSync: new Date().toISOString(),
+              totalSamples: samples.length,
+              totalWithPickLists: Object.keys(pickLists).length
+            };
+            
+            fs.writeFileSync('notion-data.json', JSON.stringify(output, null, 2));
+            console.log(`✓ Saved ${samples.length} samples`);
+            console.log(`✓ Saved ${Object.keys(pickLists).length} pick lists`);
+            
+          } catch (error) {
+            console.error('Processing error:', error.message);
             process.exit(1);
-          });
+          }
+          SCRIPT
           
-          req.write(postData);
-          req.end();
-          EOF
-          
-      - name: Commit and push changes
+      - name: Commit and push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add notion-data.json notion-samples-backup.json
+          git add notion-data.json
           git diff --staged --quiet || git commit -m "Update Notion data - $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
